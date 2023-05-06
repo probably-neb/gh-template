@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/spf13/cobra"
@@ -13,35 +15,28 @@ type GitFile struct {
 	Type         string
 	Name         string
 	Download_Url string
-	Dir          string
+	Path         string
+	Content      string
+	Encoding     string
 }
-
-var getAllGitignoreTemplates bool
 
 func getEntriesFromDir(dir string, client *api.RESTClient, ch chan<- GitFile, wg *sync.WaitGroup) {
 	defer wg.Done()
 	response := []GitFile{}
 	err := client.Get("repos/github/gitignore/contents/"+dir, &response)
 	if err != nil {
-		// return err
+		// TODO: return err
 		return
 	}
 
 	for _, file := range response {
-		if file.Type == "file" && strings.HasSuffix(file.Name, ".gitignore") {
-			file.Name = strings.TrimSuffix(file.Name, ".gitignore")
-			file.Dir = dir
-			ch <- file
-		} else if file.Type == "dir" && getAllGitignoreTemplates {
-	wg.Add(1)
-			getEntriesFromDir(dir+file.Name + "/", client, ch, wg)
-		}
+		ch <- file
 	}
 }
 
-func getGitignoreEntries(client *api.RESTClient) ([]GitFile, error) {
+func ListGitignoreTemplates(client *api.RESTClient, recurse bool) ([]GitFile, error) {
 	ch := make(chan GitFile)
-	var wg sync.WaitGroup;
+	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go getEntriesFromDir("", client, ch, &wg)
@@ -54,7 +49,13 @@ func getGitignoreEntries(client *api.RESTClient) ([]GitFile, error) {
 	files := []GitFile{}
 	// block until ch is closed and all files have been recieved
 	for file := range ch {
-		files = append(files, file)
+		if file.Type == "file" && strings.HasSuffix(file.Name, ".gitignore") {
+			file.Name = strings.TrimSuffix(file.Name, ".gitignore")
+			files = append(files, file)
+		} else if file.Type == "dir" && recurse {
+			wg.Add(1)
+			getEntriesFromDir(file.Path, client, ch, &wg)
+		}
 	}
 	// TODO: get gitignores from community and global directories
 	return files, nil
@@ -70,7 +71,7 @@ func main() {
 	}
 	listFlag := IgnoreCmd.Flags().BoolP("list", "l", false, "list available .gitignore templates")
 	getFlag := IgnoreCmd.Flags().StringP("get", "g", "", "get a gitignore template by name (use `--list` to list available templates)")
-    IgnoreCmd.Flags().BoolVarP(&getAllGitignoreTemplates, "all", "b", false, "list community and global templates as well")
+    listAllFlag := IgnoreCmd.Flags().BoolP("all", "b", false, "list community and global templates as well")
 	IgnoreCmd.MarkFlagsMutuallyExclusive("get", "list")
 
 	IgnoreCmd.Run = func(cmd *cobra.Command, args []string) {
@@ -81,19 +82,44 @@ func main() {
 		}
 
 		if *listFlag {
-			files, err := getGitignoreEntries(client)
+			templates, err := ListGitignoreTemplates(client, *listAllFlag)
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
-			for _, file := range files {
-				fmt.Printf("%s%s\n", file.Dir, file.Name)
+			for _, template := range templates {
+				fmt.Printf("%s\n", template.Path)
 			}
 		} else if cmd.Flags().Changed("get") {
-            if !cmd.Flags().Changed("all") {
-                getAllGitignoreTemplates = true
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+            if !unicode.IsUpper(rune((*getFlag)[0])) {
+                *getFlag = strings.Title(*getFlag);
             }
-			fmt.Println("get =", *getFlag)
+
+            if !strings.HasSuffix(*getFlag, ".gitignore") {
+                *getFlag += ".gitignore";
+            }
+            var template GitFile
+            err := client.Get("repos/github/gitignore/contents/" + *getFlag, &template)
+            if err != nil {
+                fmt.Println(err)
+                return
+            }
+            if template.Encoding == "base64" {
+                // TODO: is contents always included?
+                contents, err := base64.StdEncoding.DecodeString(template.Content)
+                if err != nil {
+                    fmt.Println(err)
+                    return
+                }
+                fmt.Printf("%s\n", contents);
+            } else {
+                fmt.Println("unknown encoding:", template.Encoding)
+                return
+            }
 		}
 	}
 	Cli.AddCommand(IgnoreCmd)
