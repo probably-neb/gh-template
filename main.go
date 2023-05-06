@@ -16,6 +16,8 @@ type GitFile struct {
 	Dir          string
 }
 
+var getAllGitignoreTemplates bool
+
 func getEntriesFromDir(dir string, client *api.RESTClient, ch chan<- GitFile, wg *sync.WaitGroup) {
 	defer wg.Done()
 	response := []GitFile{}
@@ -27,10 +29,10 @@ func getEntriesFromDir(dir string, client *api.RESTClient, ch chan<- GitFile, wg
 
 	for _, file := range response {
 		if file.Type == "file" && strings.HasSuffix(file.Name, ".gitignore") {
-			file.Name = dir + strings.TrimSuffix(file.Name, ".gitignore")
+			file.Name = strings.TrimSuffix(file.Name, ".gitignore")
 			file.Dir = dir
 			ch <- file
-		} else if file.Type == "dir" {
+		} else if file.Type == "dir" && getAllGitignoreTemplates {
 	wg.Add(1)
 			getEntriesFromDir(dir+file.Name + "/", client, ch, wg)
 		}
@@ -68,6 +70,7 @@ func main() {
 	}
 	listFlag := IgnoreCmd.Flags().BoolP("list", "l", false, "list available .gitignore templates")
 	getFlag := IgnoreCmd.Flags().StringP("get", "g", "", "get a gitignore template by name (use `--list` to list available templates)")
+    IgnoreCmd.Flags().BoolVarP(&getAllGitignoreTemplates, "all", "b", false, "list community and global templates as well")
 	IgnoreCmd.MarkFlagsMutuallyExclusive("get", "list")
 
 	IgnoreCmd.Run = func(cmd *cobra.Command, args []string) {
@@ -84,9 +87,12 @@ func main() {
 				return
 			}
 			for _, file := range files {
-				fmt.Printf("%s\n", file.Name)
+				fmt.Printf("%s%s\n", file.Dir, file.Name)
 			}
 		} else if cmd.Flags().Changed("get") {
+            if !cmd.Flags().Changed("all") {
+                getAllGitignoreTemplates = true
+            }
 			fmt.Println("get =", *getFlag)
 		}
 	}
