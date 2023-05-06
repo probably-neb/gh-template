@@ -2,30 +2,56 @@ package main
 
 import (
 	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/spf13/cobra"
-	"strings"
 )
 
 type GitFile struct {
 	Type         string
 	Name         string
 	Download_Url string
+	Dir          string
 }
 
 func getGitignoreEntries(client *api.RESTClient) ([]GitFile, error) {
-	response := []GitFile{}
-	err := client.Get("repos/github/gitignore/contents/", &response)
-	if err != nil {
-		return nil, err
-	}
-	files := []GitFile{}
-	for _, file := range response {
-		if file.Type == "file" && strings.HasSuffix(file.Name, ".gitignore") {
-			file.Name = strings.TrimSuffix(file.Name, ".gitignore")
-			files = append(files, file)
+
+
+	getEntriesFromDir := func(dir string, ch chan<- GitFile, wg *sync.WaitGroup) {
+        defer wg.Done()
+		response := []GitFile{}
+		err := client.Get("repos/github/gitignore/contents/", &response)
+		if err != nil {
+			// return err
+            return
+		}
+
+		for _, file := range response {
+			if file.Type == "file" && strings.HasSuffix(file.Name, ".gitignore") {
+				file.Name = strings.TrimSuffix(file.Name, ".gitignore")
+				file.Dir = dir
+				ch <- file
+			}
 		}
 	}
+
+	ch := make(chan GitFile)
+    var wg sync.WaitGroup
+    wg.Add(1);
+	go getEntriesFromDir("", ch, &wg)
+
+    go func() {
+        wg.Wait()
+        close(ch)
+    }()
+
+	files := []GitFile{}
+    // block until ch is closed and all files have been recieved
+    for file := range ch {
+        files = append(files, file)
+    }
 	// TODO: get gitignores from community and global directories
 	return files, nil
 }
