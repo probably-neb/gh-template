@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/cli/go-gh/v2/pkg/api"
+    "strings"
 )
 
 type GitFile struct {
@@ -17,12 +18,18 @@ func getGitignoreEntries(client *api.RESTClient) ([]GitFile,error) {
 	if err != nil {
 		return nil, err
 	}
+    files := []GitFile{}
+    for _, file := range response {
+        if file.Type == "file" && strings.HasSuffix(file.Name, ".gitignore") {
+            file.Name = strings.TrimSuffix(file.Name, ".gitignore")
+            files = append(files, file)
+        }
+    }
     // TODO: get gitignores from community and global directories
-    return response, nil
+    return files, nil
 }
 
 func main() {
-	fmt.Println("hi world, this is the gh-template extension!")
 	client, err := api.DefaultRESTClient()
 	if err != nil {
 		fmt.Println(err)
@@ -34,9 +41,6 @@ func main() {
 		return
 	}
 	for _, file := range files {
-		fmt.Printf("%+v\n", file)
+		fmt.Printf("%s\n", file.Name)
 	}
 }
-
-// For more examples of using go-gh, see:
-// https://github.com/cli/go-gh/blob/trunk/example_gh_test.go
