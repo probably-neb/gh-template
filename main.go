@@ -31,38 +31,38 @@ func getGitignoreEntries(client *api.RESTClient) ([]GitFile, error) {
 }
 
 func main() {
-	Cli := &cobra.Command{
-		Use:   "gh template gitignore --get python",
-		Short: "list and download the templates github provides for .gitignore files as well as licenses",
+	Cli := &cobra.Command{}
+
+	IgnoreCmd := &cobra.Command{
+		Use:     "gitignore",
+		Example: "gh template gitignore --get python",
+		Short:   "list and download the templates github provides for .gitignore files as well as licenses",
 	}
-	gitignoreFlag := Cli.Flags().BoolP("gitignore", "i", false, "do operations on gitignore templates")
-	listFlag := Cli.Flags().BoolP("list", "l", false, "list available .gitignore templates")
-	getFlag := Cli.Flags().StringP("get", "g", "", "get a gitignore template by name (use `--list` to get available templates)")
-	Cli.MarkFlagsMutuallyExclusive("get", "list")
-	Cli.Run = func(cmd *cobra.Command, args []string) {
-		if *gitignoreFlag {
-			fmt.Println("gitignore")
-			client, err := api.DefaultRESTClient()
+	listFlag := IgnoreCmd.Flags().BoolP("list", "l", false, "list available .gitignore templates")
+	getFlag := IgnoreCmd.Flags().StringP("get", "g", "", "get a gitignore template by name (use `--list` to list available templates)")
+	IgnoreCmd.MarkFlagsMutuallyExclusive("get", "list")
+
+	IgnoreCmd.Run = func(cmd *cobra.Command, args []string) {
+		client, err := api.DefaultRESTClient()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		if *listFlag {
+			files, err := getGitignoreEntries(client)
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
-
-			if *listFlag {
-				files, err := getGitignoreEntries(client)
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-				for _, file := range files {
-					fmt.Printf("%s\n", file.Name)
-				}
-
-			} else if cmd.Flags().Changed("get") {
-				fmt.Println("get =", *getFlag)
+			for _, file := range files {
+				fmt.Printf("%s\n", file.Name)
 			}
+		} else if cmd.Flags().Changed("get") {
+			fmt.Println("get =", *getFlag)
 		}
 	}
+	Cli.AddCommand(IgnoreCmd)
 	err := Cli.Execute()
 	if err != nil {
 		fmt.Println(err)
