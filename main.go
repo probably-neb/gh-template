@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -19,10 +20,11 @@ type GitFile struct {
 	Encoding     string
 }
 
-func getEntriesFromDir(dir string, client *api.RESTClient, ch chan<- GitFile, wg *sync.WaitGroup) {
+func getEntriesFromDir(repo string, dir string, client *api.RESTClient, ch chan<- GitFile, wg *sync.WaitGroup) {
 	defer wg.Done()
 	response := []GitFile{}
-	err := client.Get("repos/github/gitignore/contents/"+dir, &response)
+	base := "repos/" + repo + "/contents/"
+	err := client.Get(base+dir, &response)
 	if err != nil {
 		// TODO: return err
 		return
@@ -38,7 +40,7 @@ func ListGitignoreTemplates(client *api.RESTClient, recurse bool) ([]GitFile, er
 	var wg sync.WaitGroup
 
 	wg.Add(1)
-	go getEntriesFromDir("", client, ch, &wg)
+	go getEntriesFromDir("github/gitignore", "", client, ch, &wg)
 
 	go func() {
 		wg.Wait()
@@ -52,7 +54,7 @@ func ListGitignoreTemplates(client *api.RESTClient, recurse bool) ([]GitFile, er
 			files = append(files, file)
 		} else if file.Type == "dir" && recurse {
 			wg.Add(1)
-			go getEntriesFromDir(file.Path, client, ch, &wg)
+			go getEntriesFromDir("github/gitignore", file.Path, client, ch, &wg)
 		}
 	}
 	return files, nil
@@ -61,13 +63,11 @@ func ListGitignoreTemplates(client *api.RESTClient, recurse bool) ([]GitFile, er
 func main() {
 	Cli := &cobra.Command{}
 
-    // TODO: License command very similar to Ignore command
-    // TODO: complete subcommand for generating 
 	IgnoreCmd := &cobra.Command{
 		Use:     "gitignore",
-        Aliases: []string{"ignore"},
+		Aliases: []string{"ignore"},
 		Example: "gh template gitignore --get Python",
-		Short:   "list and download the templates github provides for .gitignore files as well as licenses",
+		Short:   "list and download GitHub .gitignore templates",
 	}
     // TODO: merge command for merging list of gitignore files into one (use special argument to merge with current repos .gitignore as well)
 	listFlag := IgnoreCmd.Flags().BoolP("list", "l", false, "list available .gitignore templates")
@@ -117,7 +117,78 @@ func main() {
 			}
 		}
 	}
+
+	LicenseCmd := &cobra.Command{
+		Use:     "license",
+		Aliases: []string{"licence", "licenses", "licences"},
+		Example: "gh template license --get mit --save\ngh template license --list",
+		Short:   "list and download license templates from GitHub",
+	}
+	licenseListFlag := LicenseCmd.Flags().BoolP("list", "l", false, "list available license templates")
+	licenseGetFlag := LicenseCmd.Flags().StringP("get", "g", "", "get a license template by key (use `--list` to list available licenses)")
+	licenseSaveFlag := LicenseCmd.Flags().BoolP("save", "s", false, "save downloaded license text to ./LICENSE")
+	LicenseCmd.MarkFlagsMutuallyExclusive("get", "list")
+
+	LicenseCmd.Run = func(cmd *cobra.Command, args []string) {
+		client, err := api.DefaultRESTClient()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		if *licenseListFlag {
+			type LicenseListItem struct {
+				Key  string
+				Name string
+			}
+			items := []LicenseListItem{}
+			err := client.Get("licenses", &items)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			for _, item := range items {
+				fmt.Printf("%s\t%s\n", item.Key, item.Name)
+			}
+			return
+		}
+
+		if cmd.Flags().Changed("get") {
+			type LicenseDetail struct {
+				Key  string
+				Name string
+				Body string
+			}
+
+			key := strings.ToLower(strings.TrimSpace(*licenseGetFlag))
+			if key == "" {
+				fmt.Println("license key cannot be empty")
+				return
+			}
+
+			var detail LicenseDetail
+			err := client.Get("licenses/"+key, &detail)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			if *licenseSaveFlag {
+				err := os.WriteFile("LICENSE", []byte(detail.Body), 0644)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Println("saved license to ./LICENSE")
+				return
+			}
+
+			fmt.Printf("%s\n", detail.Body)
+		}
+	}
+
 	Cli.AddCommand(IgnoreCmd)
+	Cli.AddCommand(LicenseCmd)
 	err := Cli.Execute()
 	if err != nil {
 		fmt.Println(err)
