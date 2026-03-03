@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/spf13/cobra"
@@ -60,6 +62,48 @@ func ListGitignoreTemplates(client *api.RESTClient, recurse bool) ([]GitFile, er
 	return files, nil
 }
 
+func getGitUserName() (string, error) {
+	cmd := exec.Command("git", "config", "user.name")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "" {
+		return "", fmt.Errorf("git user.name is empty")
+	}
+	return name, nil
+}
+
+func getGitHubLogin(client *api.RESTClient) (string, error) {
+	type viewer struct {
+		Login string `json:"login"`
+		Name  string `json:"name"`
+	}
+	var me viewer
+	err := client.Get("user", &me)
+	if err != nil {
+		return "", err
+	}
+	// Prefer full profile name when available, fall back to login.
+	if strings.TrimSpace(me.Name) != "" {
+		return strings.TrimSpace(me.Name), nil
+	}
+	if strings.TrimSpace(me.Login) != "" {
+		return strings.TrimSpace(me.Login), nil
+	}
+	return "", fmt.Errorf("github user identity is empty")
+}
+
+func templateLicenseBody(body string, fullName string) string {
+	year := fmt.Sprintf("%d", time.Now().Year())
+	result := strings.ReplaceAll(body, "[year]", year)
+	if strings.TrimSpace(fullName) != "" {
+		result = strings.ReplaceAll(result, "[fullname]", fullName)
+	}
+	return result
+}
+
 func main() {
 	Cli := &cobra.Command{}
 
@@ -69,7 +113,7 @@ func main() {
 		Example: "gh template gitignore --get Python",
 		Short:   "list and download GitHub .gitignore templates",
 	}
-    // TODO: merge command for merging list of gitignore files into one (use special argument to merge with current repos .gitignore as well)
+	// TODO: merge command for merging list of gitignore files into one (use special argument to merge with current repos .gitignore as well)
 	listFlag := IgnoreCmd.Flags().BoolP("list", "l", false, "list available .gitignore templates")
 	getFlag := IgnoreCmd.Flags().StringP("get", "g", "", "get a gitignore template by name (use `--list` to list available templates)")
 	listAllFlag := IgnoreCmd.Flags().BoolP("all", "b", false, "list community and global templates as well. For explanations of what these two groups are see https://github.com/github/gitignore#folder-structure")
@@ -92,12 +136,12 @@ func main() {
 				fmt.Printf("%s\n", strings.TrimSuffix(template.Path, ".gitignore"))
 			}
 		} else if cmd.Flags().Changed("get") {
-            name := *getFlag
+			name := *getFlag
 			if !strings.HasSuffix(name, ".gitignore") {
 				name += ".gitignore"
 			}
 			var template GitFile
-            url := "repos/github/gitignore/contents/"+name
+			url := "repos/github/gitignore/contents/" + name
 			err := client.Get(url, &template)
 			if err != nil {
 				fmt.Println(err)
@@ -173,8 +217,25 @@ func main() {
 				return
 			}
 
+			fullName, nameErr := getGitUserName()
+			if nameErr != nil {
+				fullName, nameErr = getGitHubLogin(client)
+			}
+
+			templated := templateLicenseBody(detail.Body, fullName)
+
+			if strings.Contains(detail.Body, "[fullname]") {
+				path := "./LICENSE"
+				if nameErr != nil || strings.TrimSpace(fullName) == "" {
+					fmt.Printf("Failed to template [fullname] in %s. You must fill it in yourself\n", path)
+				} else {
+					fmt.Printf("Templated [fullname] in license to %s\n", fullName)
+				}
+			}
+
 			if *licenseSaveFlag {
-				err := os.WriteFile("LICENSE", []byte(detail.Body), 0644)
+				path := "LICENSE"
+				err := os.WriteFile(path, []byte(templated), 0644)
 				if err != nil {
 					fmt.Println(err)
 					return
@@ -183,7 +244,7 @@ func main() {
 				return
 			}
 
-			fmt.Printf("%s\n", detail.Body)
+			fmt.Printf("%s\n", templated)
 		}
 	}
 
